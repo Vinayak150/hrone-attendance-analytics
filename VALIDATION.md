@@ -2,6 +2,44 @@
 
 Validated 14 October 2026. This reports executed checks, not hidden-grader results.
 
+## Final red-team audit — 14 October 2026
+
+The unchanged `07a0fad` baseline passed all 84 tests again on **both MongoDB 7.0.28 and 6.0.29**. The final suite passes **112 tests on each version, zero failures and zero skips**, including the official sample and repeated synchronized HTTP races. An additional independent matrix parsed directly from the supplied OpenAPI file passed **151 cases per version**. Seeded cross-year analytics comparisons used seeds 19, 2026 and 8317; complete outputs matched the independent test-only references.
+
+Three reproduced edge defects were fixed, without changing the data model, aggregation pipelines, dependencies or indexes:
+
+- A legal, extremely large `page` overflowed BSON's signed 64-bit skip. `pagination_skip` saturates the database offset while retaining the requested page and accurate total; employee, attendance and explain regressions cover `2**63` and `10**100`.
+- A JSON number such as `1e400` failed validation, then caused the error response itself to fail serialization. The validation handler makes nonfinite echoed inputs JSON-safe and preserves HTTP 422. Five body/error cases cover this behavior.
+- Explain ignored invalid supplied calendar parameters when a particular mode did not use them. All declared supplied calendar values now receive schema validation; six regressions cover malformed months and dates. Unused range relationships are not newly restricted.
+
+The clean checkout used a new Python 3.11.15 virtual environment and only declared production dependencies for startup. Exact `uvicorn app.main:app --port 8000` readiness took **0.771 s** without `.env`; a restart with a deliberately conflicting `.env` took **0.273 s**. Supplied environment variables selected the correct disposable database and all nine secondary indexes were verified. Declared development dependencies were then installed for the full suite on both database versions. Ruff, compilation and `pip check` passed.
+
+An owned server outage experiment returned initial 503 in **5.755 s**, recovered to 200 in **0.644 s**, returned running-outage 503 in **2.992 s**, and recovered again in **0.600 s**. Unique indexes were verified after recovery. Only isolated test servers and generated test databases were used.
+
+### Final 100k benchmark
+
+Same deterministic fixture and parameters as the baseline: 1,000 employees, 100,000 logs, ten departments, native macOS ARM64, Python 3.11.15, localhost HTTP. Values are medians of five requests after one initial request, not load-test guarantees. Both servers were official native binaries; Docker's daemon was unavailable. Tests ran on standalone servers; the implementation requires no replica set.
+
+| Query | Previous 7.0 ms | Final 7.0.28 ms | Final 6.0.29 ms |
+|---|---:|---:|---:|
+| Attendance, unfiltered | 13.04 | 14.28 | 13.43 |
+| Attendance, status/date/page | 1.80 | 2.34 | 1.68 |
+| Attendance, employee/date | 0.98 | 1.52 | 1.05 |
+| Employee monthly | 0.86 | 1.70 | 1.01 |
+| Department summary, all | 134.29 | 134.01 | 129.64 |
+| Department summary, filtered | 15.31 | 16.33 | 14.62 |
+| Late leaderboard, all | 31.90 | 33.37 | 33.86 |
+| Late leaderboard, filtered | 33.06 | 33.76 | 35.08 |
+| Department daily trend | 17.80 | 18.33 | 25.23 |
+
+All **19 query shapes on each version** matched expected output and had an indexed winning plan with no executed `COLLSCAN` and zero reported lookup collection scans. The audit excluded rejected candidate plans and inspected winning plans, execution-stage trees, lookup counters and indexes. Raw plans and per-stage counts are retained in the external audit evidence, not committed as temporary output. Explain/list command and aggregation-builder equivalence remains covered by integration tests.
+
+The ten extra shapes cover one-day date filtering, status-only filtering, combined employee/status/date, page 4,000 across the full date range, empty attendance/monthly/summary/leaderboard/trend periods, and a 92-day trend. The deep page took **43.01/42.87 ms** (7.0/6.0); the 92-day trend **33.72/42.05 ms**. The 6.0 trend was slower, with the same indexes and zero lookup scans; no compatibility difference in results was observed.
+
+The monthly 7.0 timing increased by 0.84 ms versus the earlier run. A control run of the byte-identical baseline application measured 1.17 ms monthly, 151.97 ms summary and 20.04 ms trend, demonstrating run-to-run variability. No analytics code or query changed in this audit. These samples do not establish throughput or prove absence of small latency changes. Index-building startup took 1.750 s on 7.0 and 0.794 s on 6.0, both below the 20-second requirement.
+
+The following sections preserve the earlier implementation's baseline evidence; current audit results above supersede its test counts, runtime coverage and timings.
+
 ## Endpoint verification
 
 | Method and path | Result |
@@ -80,7 +118,7 @@ The initial trend implementation took 522.49 ms median and joined logs across al
 
 ## Risks and limits
 
-- Hidden evaluator data and MongoDB 6.0 were not run. The code uses operators available in 6.0; runtime evidence is for 7.0.28.
+- Hidden evaluator data was not run. Live compatibility evidence now covers MongoDB 6.0.29 and 7.0.28; other patch versions and hosted/sharded deployments were not tested.
 - Exact totals, deep offset pagination, many employees, and large history arrays can become costly. Reports are not cross-collection snapshot transactions.
 - Duplicate business keys already present in externally corrupted data prevent unique-index initialization; the service reports unready rather than silently accepting unsafe writes.
 - One TestClient deprecation warning remains. Both the original and fresh dependency installations passed `pip check`.

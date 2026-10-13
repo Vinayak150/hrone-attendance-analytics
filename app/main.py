@@ -8,6 +8,7 @@ import re
 from contextlib import asynccontextmanager
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import ROUND_HALF_UP, Decimal
+from math import isfinite
 from threading import Lock
 from typing import Annotated, Literal
 from zoneinfo import ZoneInfo
@@ -15,6 +16,8 @@ from zoneinfo import ZoneInfo
 from bson import Decimal128, json_util
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pymongo import ASCENDING, DESCENDING, MongoClient, ReturnDocument
@@ -105,9 +108,25 @@ async def database_unavailable(request, exc):
     return JSONResponse(status_code=503, content={"detail": "MongoDB is unavailable"})
 
 
+@app.exception_handler(RequestValidationError)
+async def request_validation_error(request, exc):
+    # A JSON number such as 1e400 decodes to infinity. Preserve the normal
+    # validation response while making its echoed input JSON-serializable.
+    errors = jsonable_encoder(
+        exc.errors(), custom_encoder={float: lambda value: value if isfinite(value) else str(value)}
+    )
+    return JSONResponse(status_code=422, content={"detail": errors})
+
+
 # ------ Time, validation, and serializers ----------------------------------
 def invalid(message: str) -> HTTPException:
     return HTTPException(422, [{"type": "value_error", "loc": ["request"], "msg": message}])
+
+
+def pagination_skip(page: int, page_size: int) -> int:
+    # The contract has no page maximum. Saturate offsets beyond MongoDB's
+    # signed-64-bit document-count range instead of overflowing BSON encoding.
+    return min((page - 1) * page_size, (1 << 63) - 1)
 
 
 def parse_day(value: str) -> date:
@@ -337,7 +356,7 @@ def list_employees(department: str | None = None, page: Page = 1, page_size: Pag
     docs = (
         db.employees.find(query, {"_id": 0})
         .sort("emp_code", ASCENDING)
-        .skip((page - 1) * page_size)
+        .skip(pagination_skip(page, page_size))
         .limit(page_size)
     )
     return {
@@ -446,7 +465,7 @@ def attendance_command(emp_code, date_from, date_to, status, page, page_size):
         "filter": attendance_filter(emp_code, date_from, date_to, status),
         "projection": {"_id": 0},
         "sort": {"date": -1, "emp_code": 1},
-        "skip": (page - 1) * page_size,
+        "skip": pagination_skip(page, page_size),
         "limit": page_size,
     }
 
@@ -1077,6 +1096,19 @@ def explain_endpoint(
     from_day: str | None = Query(default=None, alias="from"),
     to_day: str | None = Query(default=None, alias="to"),
 ):
+    if month is not None:
+        month_bounds(month)
+    for name, value in (
+        ("date_from", date_from),
+        ("date_to", date_to),
+        ("from", from_day),
+        ("to", to_day),
+    ):
+        if value is not None:
+            try:
+                parse_day(value)
+            except ValueError:
+                raise invalid(f"invalid {name}") from None
     if endpoint == "attendance_list":
         collection = "attendance_logs"
         command = attendance_command(emp_code, date_from, date_to, status, page, page_size)
@@ -1086,8 +1118,6 @@ def explain_endpoint(
             and month is None
         ):
             raise invalid("month query parameter is required")
-        if month is not None:
-            month_bounds(month)
         if endpoint == "employee_monthly":
             if emp_code is None:
                 raise invalid("emp_code query parameter is required")

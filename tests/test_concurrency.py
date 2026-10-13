@@ -6,6 +6,7 @@ import subprocess
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
+from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 from threading import Barrier
 
@@ -99,6 +100,12 @@ def test_repeated_concurrent_writes(live):
             assert int(change["from"].timestamp() * 1000) == previous
             previous = int(change["to"].timestamp() * 1000)
         assert int(row["punch_in"].timestamp() * 1000) == previous
+        seconds = int((row["punch_out"] - row["punch_in"]).total_seconds())
+        assert row["work_hours"] == float(
+            (Decimal(seconds) / 3600).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        )
+        assert row["late_minutes"] == 0 and row["overtime_minutes"] == 30
+        assert row["half_day"] is False and row["status"] == "PRESENT"
 
 
 def test_restart_preserves_indexes(mongo):

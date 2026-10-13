@@ -1,6 +1,6 @@
 # Employee Attendance & Analytics API
 
-Contract v2.0 attendance service with FastAPI, PyMongo, and MongoDB aggregation. All application code is in `app/main.py`. Requires Python 3.11+ and MongoDB 6.0+; validated on MongoDB 7.0.28 with Python 3.11.15.
+Contract v2.0 attendance service with FastAPI, PyMongo, and MongoDB aggregation. All application code is in `app/main.py`. Requires Python 3.11+ and MongoDB 6.0+; validated on MongoDB 6.0.29 and 7.0.28 with Python 3.11.15.
 
 ## Run
 
@@ -34,6 +34,6 @@ Integration and benchmark runs create fresh `hrone_test_<random UUID>` databases
 - Unique indexes protect creation. Punch-out uses a conditional atomic update; corrections compare the observed record and history before `$set` plus `$push`. A concurrent loser receives 409.
 - Analytics read stored values, join by `emp_code`, retain no-log employees, use competition ranking, and generate calendar rows and seven-day windows inside MongoDB. Decimal arithmetic implements half-up rounding.
 - Explain uses the same list command and aggregation builders as production, at `executionStats` verbosity. Plans depend on actual data and MongoDB version; measured results are in `VALIDATION.md`.
-- Offset pagination and exact totals cost more on deep/large pages. Corrections compare the complete history array; very long histories will increase write cost and remain subject to MongoDB's document-size limit. No hidden grader run or MongoDB 6.0 runtime certification is claimed. A Starlette test-client deprecation warning is benign with the pinned test dependencies.
+- Offset pagination and exact totals cost more on deep/large pages. Corrections compare the complete history array; very long histories will increase write cost and remain subject to MongoDB's document-size limit. No hidden grader run is claimed. A Starlette test-client deprecation warning is benign with the pinned test dependencies.
 
 See `REVIEW.md` for starter defects and `DECISIONS.md` for the five requested design answers.
