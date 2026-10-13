@@ -1,0 +1,594 @@
+{
+  "$defs": {
+    "EpochMillis": {
+      "type": "integer",
+      "format": "int64",
+      "minimum": 100000000000,
+      "maximum": 4102444800000,
+      "description": "An instant as milliseconds since 1970-01-01T00:00:00Z. Seconds-looking values (below 100000000000), floats and\nstrings are rejected with 422.\n",
+      "example": 1783312500000
+    },
+    "EpochMillisNullable": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "int64",
+      "minimum": 100000000000,
+      "maximum": 4102444800000,
+      "description": "An instant as epoch milliseconds, or null.",
+      "example": 1783312500000
+    },
+    "Status": {
+      "type": "string",
+      "enum": [
+        "PRESENT",
+        "ABSENT",
+        "LEAVE",
+        "WFH",
+        "ON_DUTY"
+      ],
+      "description": "See the status table in the API description."
+    },
+    "PresenceStatus": {
+      "type": "string",
+      "enum": [
+        "PRESENT",
+        "WFH",
+        "ON_DUTY"
+      ]
+    },
+    "EmployeeCreate": {
+      "type": "object",
+      "required": [
+        "emp_code",
+        "name",
+        "email",
+        "department",
+        "joined_on"
+      ],
+      "properties": {
+        "emp_code": {
+          "type": "string",
+          "pattern": "^EMP\\d{4,6}$",
+          "example": "EMP0001",
+          "description": "The customer's own employee code, supplied by the client. Unique and immutable. Not MongoDB's `_id`.\nFormat for this assignment: `EMP` followed by 4-6 digits.\n"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "email": {
+          "type": "string",
+          "maxLength": 120,
+          "pattern": "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$"
+        },
+        "department": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 50
+        },
+        "shift_start": {
+          "type": "string",
+          "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+          "default": "09:30",
+          "description": "24-hour HH:MM, IST."
+        },
+        "shift_end": {
+          "type": "string",
+          "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+          "default": "18:30",
+          "description": "24-hour HH:MM, IST. <= shift_start means an overnight shift."
+        },
+        "joined_on": {
+          "type": "string",
+          "format": "date",
+          "description": "First day of employment, YYYY-MM-DD."
+        }
+      },
+      "additionalProperties": false
+    },
+    "Employee": {
+      "type": "object",
+      "required": [
+        "emp_code",
+        "name",
+        "email",
+        "department",
+        "shift_start",
+        "shift_end",
+        "joined_on",
+        "created_at"
+      ],
+      "properties": {
+        "emp_code": {
+          "type": "string",
+          "description": "The customer-generated employee code. Unique, immutable. Not the MongoDB _id."
+        },
+        "name": {
+          "type": "string"
+        },
+        "email": {
+          "type": "string"
+        },
+        "department": {
+          "type": "string"
+        },
+        "shift_start": {
+          "type": "string"
+        },
+        "shift_end": {
+          "type": "string"
+        },
+        "joined_on": {
+          "type": "string",
+          "format": "date"
+        },
+        "created_at": {
+          "readOnly": true,
+          "allOf": [
+            {
+              "$ref": "#/$defs/EpochMillis"
+            }
+          ],
+          "description": "Server-set creation time, epoch milliseconds."
+        }
+      },
+      "additionalProperties": false
+    },
+    "EmployeePage": {
+      "type": "object",
+      "required": [
+        "items",
+        "total",
+        "page",
+        "page_size"
+      ],
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Employee"
+          }
+        },
+        "total": {
+          "type": "integer"
+        },
+        "page": {
+          "type": "integer"
+        },
+        "page_size": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": false
+    },
+    "PunchInRequest": {
+      "type": "object",
+      "required": [
+        "emp_code"
+      ],
+      "properties": {
+        "emp_code": {
+          "type": "string"
+        },
+        "punched_at": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/EpochMillis"
+            }
+          ],
+          "description": "Epoch milliseconds. Defaults to now."
+        },
+        "status": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/PresenceStatus"
+            }
+          ],
+          "default": "PRESENT"
+        }
+      },
+      "additionalProperties": false
+    },
+    "PunchOutRequest": {
+      "type": "object",
+      "required": [
+        "emp_code"
+      ],
+      "properties": {
+        "emp_code": {
+          "type": "string"
+        },
+        "punched_at": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/EpochMillis"
+            }
+          ],
+          "description": "Epoch milliseconds. Defaults to now."
+        }
+      },
+      "additionalProperties": false
+    },
+    "RegularizeRequest": {
+      "type": "object",
+      "required": [
+        "reason",
+        "regularized_by"
+      ],
+      "description": "Only these fields can be changed. Derived fields can not be sent.",
+      "properties": {
+        "status": {
+          "$ref": "#/$defs/Status"
+        },
+        "punch_in": {
+          "$ref": "#/$defs/EpochMillis"
+        },
+        "punch_out": {
+          "$ref": "#/$defs/EpochMillis"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 5,
+          "maxLength": 200
+        },
+        "regularized_by": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 50
+        }
+      },
+      "additionalProperties": false
+    },
+    "HistoryEntry": {
+      "type": "object",
+      "required": [
+        "at",
+        "by",
+        "reason",
+        "changes"
+      ],
+      "properties": {
+        "at": {
+          "$ref": "#/$defs/EpochMillis"
+        },
+        "by": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "changes": {
+          "type": "object",
+          "description": "One key per field that actually changed (`status`, `punch_in`, `punch_out`, `work_hours`, `late_minutes`,\n`overtime_minutes`, `half_day`). The `from` / `to` values of `punch_in` and `punch_out` are epoch\nmilliseconds (or null); the others keep their normal types.\n",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "from": {},
+              "to": {}
+            },
+            "additionalProperties": false
+          },
+          "example": {
+            "punch_in": {
+              "from": 1783312500000,
+              "to": 1783310280000
+            },
+            "late_minutes": {
+              "from": 35,
+              "to": 0
+            }
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "AttendanceRecord": {
+      "type": "object",
+      "required": [
+        "emp_code",
+        "date",
+        "status",
+        "punch_in",
+        "punch_out",
+        "work_hours",
+        "late_minutes",
+        "overtime_minutes",
+        "half_day",
+        "history"
+      ],
+      "properties": {
+        "emp_code": {
+          "type": "string"
+        },
+        "date": {
+          "type": "string",
+          "format": "date",
+          "description": "The attendance day (R1), YYYY-MM-DD."
+        },
+        "status": {
+          "$ref": "#/$defs/Status"
+        },
+        "punch_in": {
+          "$ref": "#/$defs/EpochMillisNullable"
+        },
+        "punch_out": {
+          "$ref": "#/$defs/EpochMillisNullable"
+        },
+        "work_hours": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "readOnly": true,
+          "description": "Computed (R4). Null until punch-out."
+        },
+        "late_minutes": {
+          "type": "integer",
+          "readOnly": true,
+          "description": "Computed (R2)."
+        },
+        "overtime_minutes": {
+          "type": "integer",
+          "readOnly": true,
+          "description": "Computed (R3)."
+        },
+        "half_day": {
+          "type": "boolean",
+          "readOnly": true,
+          "description": "Computed (R5)."
+        },
+        "history": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HistoryEntry"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "AttendancePage": {
+      "type": "object",
+      "required": [
+        "items",
+        "total",
+        "page",
+        "page_size"
+      ],
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AttendanceRecord"
+          }
+        },
+        "total": {
+          "type": "integer"
+        },
+        "page": {
+          "type": "integer"
+        },
+        "page_size": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": false
+    },
+    "EmployeeMonthly": {
+      "type": "object",
+      "required": [
+        "emp_code",
+        "month",
+        "working_days",
+        "present_days",
+        "leave_days",
+        "late_count",
+        "total_late_minutes",
+        "total_overtime_minutes",
+        "attendance_pct"
+      ],
+      "properties": {
+        "emp_code": {
+          "type": "string"
+        },
+        "month": {
+          "type": "string"
+        },
+        "working_days": {
+          "type": "integer"
+        },
+        "present_days": {
+          "type": "number"
+        },
+        "leave_days": {
+          "type": "integer"
+        },
+        "late_count": {
+          "type": "integer"
+        },
+        "total_late_minutes": {
+          "type": "integer"
+        },
+        "total_overtime_minutes": {
+          "type": "integer"
+        },
+        "attendance_pct": {
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "DepartmentSummary": {
+      "type": "object",
+      "required": [
+        "month",
+        "items"
+      ],
+      "properties": {
+        "month": {
+          "type": "string"
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "department",
+              "headcount",
+              "present_days",
+              "avg_work_hours",
+              "late_count",
+              "total_late_minutes",
+              "leave_count",
+              "on_duty_count"
+            ],
+            "properties": {
+              "department": {
+                "type": "string"
+              },
+              "headcount": {
+                "type": "integer"
+              },
+              "present_days": {
+                "type": "number"
+              },
+              "avg_work_hours": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "late_count": {
+                "type": "integer"
+              },
+              "total_late_minutes": {
+                "type": "integer"
+              },
+              "leave_count": {
+                "type": "integer"
+              },
+              "on_duty_count": {
+                "type": "integer"
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "Leaderboard": {
+      "type": "object",
+      "required": [
+        "month",
+        "items"
+      ],
+      "properties": {
+        "month": {
+          "type": "string"
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "rank",
+              "emp_code",
+              "name",
+              "department",
+              "total_late_minutes",
+              "late_count"
+            ],
+            "properties": {
+              "rank": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "emp_code": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "department": {
+                "type": "string"
+              },
+              "total_late_minutes": {
+                "type": "integer"
+              },
+              "late_count": {
+                "type": "integer"
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "Trend": {
+      "type": "object",
+      "required": [
+        "department",
+        "items"
+      ],
+      "properties": {
+        "department": {
+          "type": "string"
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "date",
+              "is_working_day",
+              "headcount",
+              "present_count",
+              "late_count",
+              "attendance_rate",
+              "moving_avg_7d"
+            ],
+            "properties": {
+              "date": {
+                "type": "string",
+                "format": "date"
+              },
+              "is_working_day": {
+                "type": "boolean"
+              },
+              "headcount": {
+                "type": "integer"
+              },
+              "present_count": {
+                "type": "number"
+              },
+              "late_count": {
+                "type": "integer"
+              },
+              "attendance_rate": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "moving_avg_7d": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}
