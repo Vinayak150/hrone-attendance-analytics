@@ -8,7 +8,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
-from threading import Barrier
+from threading import Barrier, Event
 
 import httpx
 import pytest
@@ -163,3 +163,77 @@ def test_regularization_same_snapshot_conflicts(api, monkeypatch):
         results = parallel(http, "PATCH", "/attendance/EMP1001/2026-07-06", edits)
     assert sorted(r.status_code for r in results) == [200, 409]
     assert len(db.attendance_logs.find_one()["history"]) == 1
+
+
+@pytest.mark.parametrize("interleaving", ["punch_out", "correction", "history_cycle"])
+def test_punch_out_and_correction_interleavings(api, monkeypatch, interleaving):
+    """Hold one write after its read; a different endpoint commits first."""
+    from pymongo.synchronous.collection import Collection
+
+    http, db = api
+    assert http.post("/employees", json=employee()).status_code == 201
+    assert (
+        http.post(
+            "/attendance/punch-in",
+            json={"emp_code": "EMP1001", "punched_at": ms("2026-07-06T09:30:00")},
+        ).status_code
+        == 201
+    )
+    correction_path = "/attendance/EMP1001/2026-07-06"
+    metadata = {"reason": "correct clock", "regularized_by": "hr"}
+    out = {"emp_code": "EMP1001", "punched_at": ms("2026-07-06T19:00:00")}
+    edit = metadata | {"punch_in": ms("2026-07-06T09:45:00")}
+    method, path, body = (
+        ("PATCH", correction_path, edit)
+        if interleaving == "correction"
+        else ("POST", "/attendance/punch-out", out)
+    )
+    ready, release = Event(), Event()
+    original = Collection.find_one_and_update
+
+    def pause_first_write(collection, *args, **kwargs):
+        if collection.full_name == db.attendance_logs.full_name and not ready.is_set():
+            ready.set()
+            assert release.wait(timeout=10), "test did not release the stale write"
+        return original(collection, *args, **kwargs)
+
+    with monkeypatch.context() as patch, ThreadPoolExecutor(max_workers=1) as pool:
+        patch.setattr(Collection, "find_one_and_update", pause_first_write)
+        pending = pool.submit(http.request, method, path, json=body)
+        try:
+            assert ready.wait(timeout=10), "request did not reach its write"
+            if interleaving == "correction":
+                assert http.post("/attendance/punch-out", json=out).status_code == 200
+            else:
+                assert (
+                    http.patch(
+                        correction_path,
+                        json=metadata | {"punch_in": ms("2026-07-06T10:00:00")},
+                    ).status_code
+                    == 200
+                )
+                if interleaving == "history_cycle":
+                    # Times/status return to the snapshot; only history exposes the change.
+                    assert (
+                        http.patch(
+                            correction_path,
+                            json=metadata | {"punch_in": ms("2026-07-06T09:30:00")},
+                        ).status_code
+                        == 200
+                    )
+            committed = db.attendance_logs.find_one()
+        finally:
+            release.set()
+        assert pending.result(timeout=10).status_code == 409
+    assert db.attendance_logs.find_one() == committed
+
+    response = http.request(method, path, json=body)
+    assert response.status_code == 200
+    row = db.attendance_logs.find_one()
+    expected_hours = {"punch_out": 9.0, "correction": 9.25, "history_cycle": 9.5}
+    expected_late = {"punch_out": 30, "correction": 15, "history_cycle": 0}
+    assert row["work_hours"] == expected_hours[interleaving]
+    assert row["late_minutes"] == expected_late[interleaving]
+    assert row["overtime_minutes"] == 30 and row["half_day"] is False
+    assert row["history"][: len(committed["history"])] == committed["history"]
+    assert len(row["history"]) == (2 if interleaving == "history_cycle" else 1)

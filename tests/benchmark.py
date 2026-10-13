@@ -18,6 +18,19 @@ from tests.test_contract import employee
 from tests.test_integration import walk
 
 
+def executed_plan(value):
+    """Keep winning/executed stages and lookup counters, excluding unused alternatives."""
+    if isinstance(value, dict):
+        return {
+            key: executed_plan(child)
+            for key, child in value.items()
+            if key not in ("rejectedPlans", "allPlansExecution")
+        }
+    if isinstance(value, list):
+        return [executed_plan(child) for child in value]
+    return value
+
+
 def main():
     with disposable_database() as db:
         staff = [
@@ -103,6 +116,59 @@ def main():
                     {"from": "2026-07-01", "to": "2026-07-31"},
                 ),
             ]
+            cases += [
+                (
+                    "attendance_list",
+                    "/attendance",
+                    {"date_from": "2026-07-15", "date_to": "2026-07-15"},
+                ),
+                ("attendance_list", "/attendance", {"status": "PRESENT"}),
+                (
+                    "attendance_list",
+                    "/attendance",
+                    {
+                        "emp_code": "EMP000001",
+                        "status": "WFH",
+                        "date_from": "2026-07-01",
+                        "date_to": "2026-07-31",
+                    },
+                ),
+                (
+                    "attendance_list",
+                    "/attendance",
+                    {"date_from": "2026-05-01", "date_to": "2026-08-08", "page": 4000},
+                ),
+                (
+                    "attendance_list",
+                    "/attendance",
+                    {"date_from": "2027-01-01", "date_to": "2027-01-31"},
+                ),
+                (
+                    "employee_monthly",
+                    "/analytics/employees/EMP000001/monthly",
+                    {"month": "2027-01"},
+                ),
+                (
+                    "department_summary",
+                    "/analytics/departments/summary",
+                    {"month": "2027-01", "department": "Department1"},
+                ),
+                (
+                    "late_leaderboard",
+                    "/analytics/leaderboard/late",
+                    {"month": "2027-01", "limit": 2},
+                ),
+                (
+                    "department_trend",
+                    "/analytics/departments/Department1/trend",
+                    {"from": "2027-01-01", "to": "2027-01-31"},
+                ),
+                (
+                    "department_trend",
+                    "/analytics/departments/Department1/trend",
+                    {"from": "2026-05-01", "to": "2026-07-31"},
+                ),
+            ]
             results = []
             for mode, path, params in cases:
                 latencies = []
@@ -113,12 +179,14 @@ def main():
                     assert response.status_code == 200, response.text
                 actual = response.json()
                 if mode == "employee_monthly":
-                    expected = monthly_reference(staff[1], logs, "2026-07")
+                    expected = monthly_reference(staff[1], logs, params["month"])
                 elif mode == "department_summary":
-                    expected = summary_reference(staff, logs, "2026-07", params.get("department"))
+                    expected = summary_reference(
+                        staff, logs, params["month"], params.get("department")
+                    )
                 elif mode == "late_leaderboard":
                     expected = leaderboard_reference(
-                        staff, logs, "2026-07", 2, params.get("department")
+                        staff, logs, params["month"], 2, params.get("department")
                     )
                 elif mode == "department_trend":
                     expected = trend_reference(
@@ -153,7 +221,7 @@ def main():
                 response = http.get("/admin/explain/" + mode, params=ep)
                 assert response.status_code == 200, response.text
                 plan = response.json()["explain"]
-                nodes = list(walk(plan))
+                nodes = list(walk(executed_plan(plan)))
                 stages = sorted({n["stage"] for n in nodes if "stage" in n})
                 indexes = sorted(
                     {n["indexName"] for n in nodes if "indexName" in n}
@@ -187,7 +255,11 @@ def main():
                     dict(
                         endpoint=mode,
                         params=params,
-                        cold_ms=round(latencies[0], 2),
+                        first_request_ms=round(latencies[0], 2),
+                        winning_plans=[n["winningPlan"] for n in nodes if "winningPlan" in n],
+                        execution_trees=[
+                            n["executionStages"] for n in nodes if "executionStages" in n
+                        ],
                         warm_median_ms=round(statistics.median(latencies[1:]), 2),
                         warm_min_ms=round(min(latencies[1:]), 2),
                         warm_max_ms=round(max(latencies[1:]), 2),

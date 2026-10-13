@@ -1,6 +1,10 @@
 # Employee Attendance & Analytics API
 
-Contract v2.0 attendance service with FastAPI, PyMongo, and MongoDB aggregation. All application code is in `app/main.py`. Requires Python 3.11+ and MongoDB 6.0+; validated on MongoDB 6.0.29 and 7.0.28 with Python 3.11.15.
+FastAPI/PyMongo implementation of HROne contract v2.0. Requires Python 3.11+ and MongoDB 6.0+; tested with Python 3.11.15 and MongoDB **6.0.29 / 7.0.28**.
+
+All application code is in `app/main.py`. Synchronous routes run in FastAPI's worker threads with a shared PyMongo client. Unique indexes arbitrate duplicate inserts; conditional updates protect punch-out and append correction history atomically. UTC BSON instants become epoch milliseconds at the boundary; attendance dates use IST and rounding is half-up.
+
+Analytics run entirely in MongoDB: employee-based lookups retain no-log headcounts, sums/counts produce record-weighted averages, `$rank` preserves cutoff ties, and generated calendar rows feed seven-day windows. Explain shares production query builders.
 
 ## Run
 
@@ -13,27 +17,19 @@ export MONGO_DB='attendance_db'
 uvicorn app.main:app --port 8000
 ```
 
-Check readiness: `curl -i http://127.0.0.1:8000/health`. It returns 200 after a successful database ping and index initialization, otherwise 503. Startup creates indexes idempotently against externally seeded `employees` and `attendance_logs`; no seed step is required. Failed startup initialization is retried before readiness or writes. Real environment variables override optional local `.env` settings. Never commit credentials.
+Startup creates nine secondary indexes idempotently; no seed step is required. `GET /health` returns 200 after database ping/index readiness, otherwise 503. Environment variables override optional `.env` settings.
 
 ## Verify
 
 ```sh
 pip install -r requirements-dev.txt
-python -m pytest -q tests/test_rules.py
-TEST_MONGO_URI='mongodb://127.0.0.1:27017' python -m pytest -q
-TEST_MONGO_URI='mongodb://127.0.0.1:27017' python -m tests.benchmark
-ruff check .
-ruff format --check .
+export TEST_MONGO_URI='mongodb://127.0.0.1:27017'
+export CANDIDATE_KIT='/absolute/path/to/candidate_kit'
+python -m pytest -q
+python -m tests.benchmark
+ruff check . && ruff format --check .
 ```
 
-Integration and benchmark runs create fresh `hrone_test_<random UUID>` databases and delete only those databases. They never drop `MONGO_DB` or a user-supplied database name. Use a development server whose account may create/drop disposable databases. Without `TEST_MONGO_URI`, database tests explicitly skip. The original sample test additionally requires `CANDIDATE_KIT=/absolute/path/to/candidate_kit`; it runs the supplied seed script only against its own disposable database. Sample dumps are not included.
+Tests own disposable UUID databases; use a development server. Missing configuration explicitly skips database/original-sample tests. Verified: **115 tests per server**, plus **19 benchmark shapes** over 100,000 logs with matching results and indexed winning plans.
 
-## Design and limits
-
-- BSON UTC datetimes are converted to integer milliseconds at the API boundary. Punch inputs are strict integers and truncated to seconds; shift/date calculations use IST.
-- Unique indexes protect creation. Punch-out uses a conditional atomic update; corrections compare the observed record and history before `$set` plus `$push`. A concurrent loser receives 409.
-- Analytics read stored values, join by `emp_code`, retain no-log employees, use competition ranking, and generate calendar rows and seven-day windows inside MongoDB. Decimal arithmetic implements half-up rounding.
-- Explain uses the same list command and aggregation builders as production, at `executionStats` verbosity. Plans depend on actual data and MongoDB version; measured results are in `VALIDATION.md`.
-- Offset pagination and exact totals cost more on deep/large pages. Corrections compare the complete history array; very long histories will increase write cost and remain subject to MongoDB's document-size limit. No hidden grader run is claimed. A Starlette test-client deprecation warning is benign with the pinned test dependencies.
-
-See `REVIEW.md` for starter defects and `DECISIONS.md` for the five requested design answers.
+[VALIDATION.md](VALIDATION.md) contains commands, measurements, prior contract-audit evidence and limitations. [REVIEW.md](REVIEW.md) covers starter defects; [DECISIONS.md](DECISIONS.md) answers the five design questions. Deep offsets, exact totals and long histories remain scaling costs; reports are not snapshot transactions.
